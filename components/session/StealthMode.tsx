@@ -149,7 +149,7 @@ export function StealthModeWrapper({ children }: { children: React.ReactNode }) 
   return <MinimalOverlay containerRef={containerRef} />;
 }
 
-function MinimalOverlay({ containerRef }: { containerRef: React.RefObject<HTMLDivElement> }) {
+function MinimalOverlay({ containerRef }: { containerRef: React.RefObject<HTMLDivElement | null> }) {
   return (
     <div
       ref={containerRef}

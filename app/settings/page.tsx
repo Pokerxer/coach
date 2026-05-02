@@ -105,7 +105,7 @@ export default function SettingsPage() {
                 className="hidden"
                 onChange={(e) => e.target.files?.[0] && uploadResume(e.target.files[0])}
               />
-              <Button size="sm" variant="outline" disabled={uploading} asChild={false}>
+              <Button size="sm" variant="outline" disabled={uploading}>
                 {uploading
                   ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Analysing…</>
                   : <><Upload className="h-3.5 w-3.5 mr-1" />Upload PDF</>}

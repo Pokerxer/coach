@@ -45,7 +45,7 @@ export default function BillingPage() {
 
   return (
     <div className="min-h-screen">
-      <Navbar credits={profile?.credits ?? 0} plan={profile?.subscription_plan ?? 'free'} />
+      <Navbar />
 
       <main className="max-w-5xl mx-auto px-6 py-10">
         <div className="mb-10">
