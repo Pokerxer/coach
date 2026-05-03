@@ -13,6 +13,12 @@ app.setName('System Audio');
 app.commandLine.appendSwitch('enable-features', 'WebSpeechAPI');
 app.commandLine.appendSwitch('enable-speech-dispatcher');
 
+// Force older capture path that respects setContentProtection on macOS
+// This can help hide windows from browser-based screen share (Chrome, Meet, etc.)
+if (process.platform === 'darwin') {
+  app.commandLine.appendSwitch('disable-features', 'IOSurfaceCapturer,DesktopCaptureMacV2');
+}
+
 // ─── 2. Dock / Taskbar stealth ────────────────────────────────────────────────
 if (process.platform === 'darwin') app.dock.hide();
 
