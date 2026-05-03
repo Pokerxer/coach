@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parakeet AI</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <div class="header">
+      <div class="logo">
+        <div class="logo-icon">P</div>
+        <span class="logo-text">Parakeet AI</span>
+      </div>
+      <div class="header-actions">
+        <span class="status-badge" id="status">Ready</span>
+        <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
+      </div>
+    </div>
+
+    <!-- Session Setup -->
+    <div id="setup-view" class="view">
+      <div class="form-group">
+        <label>Interview Platform</label>
+        <select id="tab-select">
+          <option value="">Detecting meetings...</option>
+        </select>
+        <button class="btn btn-sm" id="refresh-tabs">Refresh</button>
+      </div>
+
+      <div class="form-group">
+        <label>AI Model</label>
+        <div class="model-selector">
+          <button class="model-btn active" data-model="gpt-4.1">GPT-4.1</button>
+          <button class="model-btn" data-model="claude-4">Claude 4</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Language</label>
+        <select id="language-select">
+          <option value="en">English</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="zh">Chinese</option>
+          <option value="hi">Hindi</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input type="checkbox" id="auto-detect" checked>
+          Auto-detect questions & generate answers
+        </label>
+      </div>
+
+      <button class="btn btn-primary btn-lg" id="start-btn">
+        <span>▶</span> Start Session
+      </button>
+    </div>
+
+    <!-- Active Session -->
+    <div id="session-view" class="view hidden">
+      <div class="session-header">
+        <div class="session-info">
+          <span class="dot live"></span>
+          <span id="session-duration">00:00</span>
+        </div>
+        <button class="btn btn-danger" id="stop-btn">Stop</button>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab active" data-tab="transcript">Transcript</button>
+        <button class="tab" data-tab="answers">Answers</button>
+        <button class="tab" data-tab="notes">Notes</button>
+      </div>
+
+      <!-- Tab Content -->
+      <div class="tab-content" id="tab-transcript">
+        <div id="transcript-list" class="scroll-list">
+          <p class="empty">Listening for questions...</p>
+        </div>
+      </div>
+
+      <div class="tab-content hidden" id="tab-answers">
+        <div id="answers-list" class="scroll-list">
+          <p class="empty">AI answers will appear here</p>
+        </div>
+      </div>
+
+      <div class="tab-content hidden" id="tab-notes">
+        <div id="notes-list" class="scroll-list">
+          <p class="empty">Notes will be generated when session ends</p>
+        </div>
+        <button class="btn btn-sm" id="generate-notes">Generate Notes</button>
+      </div>
+
+      <!-- Quick Question -->
+      <div class="quick-question">
+        <input type="text" id="quick-question" placeholder="Ask a question manually..." />
+        <button class="btn btn-sm" id="ask-btn">Ask</button>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Settings</h2>
+          <button class="icon-btn" id="close-settings">✕</button>
+        </div>
+
+        <div class="form-group">
+          <label>OpenAI API Key</label>
+          <input type="password" id="api-key" placeholder="sk-..." />
+        </div>
+
+        <div class="form-group">
+          <label>Resume (paste text)</label>
+          <textarea id="resume" rows="4" placeholder="Paste your resume here..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Job Description</label>
+          <textarea id="job-desc" rows="3" placeholder="Paste job description..."></textarea>
+        </div>
+
+        <button class="btn btn-primary" id="save-settings">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
