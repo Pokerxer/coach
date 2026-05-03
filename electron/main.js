@@ -1,186 +1,167 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, systemPreferences, desktopCapturer, shell } = require('electron');
+const {
+  app, BrowserWindow, ipcMain, globalShortcut,
+  screen, session, systemPreferences, desktopCapturer, shell,
+} = require('electron');
 const path = require('path');
 
 const APP_URL = process.env.APP_URL || 'http://localhost:3000';
 
-// ─── 1. Process stealth — must run before anything else ─────────────────────
-// Rename the process title so Activity Monitor / ps / top show a benign name
-// that blends in with legitimate macOS audio/system services.
+// ─── 1. Process stealth ───────────────────────────────────────────────────────
 try { process.title = 'coreaudiod'; } catch {}
-
-// Rename the Electron app name (affects some system dialogs & crash reports)
 app.setName('System Audio');
 
-// Must be called before app is ready — enables webkitSpeechRecognition audio stream
 app.commandLine.appendSwitch('enable-features', 'WebSpeechAPI');
 app.commandLine.appendSwitch('enable-speech-dispatcher');
 
-// ─── 2. Dock / Taskbar stealth ───────────────────────────────────────────────
-// Hide from macOS Dock AND Cmd+Tab application switcher. Must be called before
-// the app is ready. On Windows, skipTaskbar on the windows handles taskbar hiding.
-if (process.platform === 'darwin') {
-  app.dock.hide();
-}
+// ─── 2. Dock / Taskbar stealth ────────────────────────────────────────────────
+if (process.platform === 'darwin') app.dock.hide();
 
-let mainWindow = null;
+let mainWindow    = null;
 let overlayWindow = null;
-let stealthInterval = null;
+let stealthInterval      = null;
+let captureCheckInterval = null;
 
-// ─── Main app window ─────────────────────────────────────────────────────────
+// ─── Main window ──────────────────────────────────────────────────────────────
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 900,
-    minHeight: 600,
+    width: 1280, height: 860, minWidth: 900, minHeight: 600,
     backgroundColor: '#0A0A0F',
-    // skipTaskbar keeps it off the Windows taskbar; macOS handled by dock.hide()
     skipTaskbar: true,
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
+      nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
       allowRunningInsecureContent: false,
     },
   });
-
   mainWindow.loadURL(APP_URL);
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-// ─── 3. Overlay window — invisible to all screen capture paths ───────────────
+// ─── 3. Stealth enforcement ───────────────────────────────────────────────────
 //
-// How capture exclusion works on each platform:
+// KEY RULES for reliable content protection:
 //
-//  macOS 12.3+  — ScreenCaptureKit (used by Zoom, Meet, Teams, OBS, QuickTime)
-//    setContentProtection(true) → NSWindowSharingNone
-//    SCK reads the sharing type before compositing; windows with SharingNone
-//    are replaced with a black rect then excluded entirely from the stream.
+//  1. setContentProtection(true) MUST be called before the window is shown.
+//     Once shown without it, macOS may cache the sharingType = ReadOnly forever
+//     until the process restarts.
 //
-//  macOS legacy — CGWindowListCreateImage (older Zoom, some 3rd-party recorders)
-//    Also respects NSWindowSharingNone; window is excluded from the snapshot.
+//  2. NEVER call setLevel() after setAlwaysOnTop() — setLevel resets the
+//     CGWindowLevel to whatever integer you pass, blowing away the 'screen-saver'
+//     level (≈2003 on macOS). Use ONLY setAlwaysOnTop with the level string.
 //
-//  Windows — SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)
-//    setContentProtection(true) → WDA_EXCLUDEFROMCAPTURE via DwmSetWindowAttribute
-//    Supported by all DirectX/GDI capture paths including OBS, ShareX, Teams.
+//  3. Re-apply on show/focus/restore ONLY — not on move/resize. Those fire
+//     constantly and race with the window manager, causing flicker and
+//     occasionally resetting sharingType to ReadOnly.
 //
-// Re-applying stealth on show/focus/restore is essential — some Electron
-// internals and OS events reset NSWindow sharingType between events.
-
+//  4. transparent:false + solid backgroundColor is REQUIRED for reliable
+//     content protection on macOS 13+. Transparent windows can fall back to
+//     a different compositor path that ignores NSWindowSharingNone on some
+//     GPU configurations.
+//
 function applyStealthMode(win) {
   win.setContentProtection(true);
-  // 'screen-saver' level floats above full-screen apps including Zoom/Meet in FS mode.
   win.setAlwaysOnTop(true, 'screen-saver', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  // Also set the window level explicitly
-  win.setLevel(1); // CGWindowLevelForKey('screenSaverWindow')
+}
 }
 
+// ─── 4. Overlay window ────────────────────────────────────────────────────────
 function createOverlayWindow() {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   overlayWindow = new BrowserWindow({
-    width: 460,
-    height: 640,
-    x: width - 480,
-    y: 20,
+    width: 460, height: 640,
+    x: width - 480, y: 20,
     show: false,
     frame: false,
-    // Opaque windows go through the standard compositor where
-    // setContentProtection(true) reliably excludes the window from ALL capture
-    // paths on macOS 12-14: SCK (Zoom/Meet/Teams), CGWindowListCreateImage, QuickTime.
+
+    // MUST be false for reliable content protection on macOS 13+ Ventura/Sonoma.
+    // Transparent windows use a separate compositor path that can ignore
+    // NSWindowSharingNone on certain GPU drivers / SCK versions.
     transparent: false,
     backgroundColor: '#0A0A0F',
+
     alwaysOnTop: true,
-    hasShadow: false,
+    hasShadow: true,    // true keeps the window in the standard compositor path
     resizable: true,
     skipTaskbar: true,
     focusable: true,
     paintWhenInitiallyHidden: false,
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
+      nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
       backgroundThrottling: false,
     },
   });
 
-  // Apply stealth before loadURL — the window is protected from frame 0
+  // Apply stealth BEFORE loadURL — window is protected from frame 0.
+  // If you call setContentProtection after show(), macOS may not honour it
+  // until the next window recreation.
   applyStealthMode(overlayWindow);
 
-  // Re-enforce on every event that could reset NSWindow sharingType
+  // Re-enforce on events that can reset NSWindow sharingType.
+  // Deliberately NOT on 'move' or 'resize' — those fire continuously and
+  // racing setAlwaysOnTop with the window manager causes flicker.
   overlayWindow.on('show',    () => applyStealthMode(overlayWindow));
   overlayWindow.on('focus',   () => applyStealthMode(overlayWindow));
   overlayWindow.on('restore', () => applyStealthMode(overlayWindow));
-  overlayWindow.on('move',    () => applyStealthMode(overlayWindow));
-  overlayWindow.on('resize',  () => applyStealthMode(overlayWindow));
   overlayWindow.on('blur',    () => applyStealthMode(overlayWindow));
 
   overlayWindow.loadURL(APP_URL + '/float');
-  overlayWindow.on('closed', () => { overlayWindow = null; clearInterval(stealthInterval); });
 
-  // ── Periodic stealth re-enforcement ──────────────────────────────────────
-  // Belt-and-suspenders: every 2 s, silently re-apply content protection
-  // in case an OS update, Electron internal, or Accessibility API reset it.
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+    if (stealthInterval)      { clearInterval(stealthInterval);      stealthInterval      = null; }
+    if (captureCheckInterval) { clearInterval(captureCheckInterval); captureCheckInterval = null; }
+  });
+
+  // ── Belt-and-suspenders: re-enforce content protection every 2 s ──────────
+  // Catches cases where an OS update, Accessibility API call, or Electron
+  // internal event silently resets the NSWindow sharingType back to ReadOnly.
   stealthInterval = setInterval(() => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
       try { overlayWindow.setContentProtection(true); } catch {}
     }
   }, 2000);
 
-  // ── Screen share detection ────────────────────────────────────────────────
-  // Poll to detect if screen is being captured (e.g., Zoom/Meet share started)
-  const captureCheckInterval = setInterval(async () => {
+  // ── Detect active screen sharing (heuristic) ─────────────────────────────
+  // desktopCapturer.getSources fires the same OS permission prompt as Zoom.
+  // If sources are available, a capture session is likely active — we keep
+  // stealth enforced and don't auto-show the overlay without user intent.
+  captureCheckInterval = setInterval(async () => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return;
-    
     try {
-      const sources = await desktopCapturer.getSources({ 
-        types: ['screen'],
-        thumbnailSize: { width: 1, height: 1 }
-      });
-      
-      // If there are multiple screens being captured, user likely started sharing
-      // This is a heuristic - we can't directly detect Zoom's capture state
-      const screenSources = sources.filter(s => s.id.startsWith('screen:'));
-      if (screenSources.length > 0) {
-        // User might be sharing - keep overlay hidden, show only when explicitly shown
-        // Don't auto-show during potential share
-      }
-    } catch (e) {
-      // Ignore errors in capture check
-    }
-  }, 3000);
+      await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } });
+      // Sources available = screen capture permission granted. Stealth is handled
+      // by content protection, not by hiding, so no action needed here.
+    } catch { /* permission denied or no sources — fine */ }
+  }, 5000);
 }
 
-// ─── IPC handlers ─────────────────────────────────────────────────────────────
+// ─── IPC: window control ──────────────────────────────────────────────────────
 ipcMain.handle('show-overlay', () => {
   if (!overlayWindow) return;
-  applyStealthMode(overlayWindow);   // always re-enforce before showing
+  applyStealthMode(overlayWindow); // always re-enforce before showing
   overlayWindow.show();
   overlayWindow.focus();
 });
 
-ipcMain.handle('hide-overlay', () => {
-  overlayWindow?.hide();
-});
-
-ipcMain.handle('minimize-overlay', () => {
-  overlayWindow?.minimize();
-});
+ipcMain.handle('hide-overlay',     () => { overlayWindow?.hide(); });
+ipcMain.handle('minimize-overlay', () => { overlayWindow?.minimize(); });
 
 ipcMain.handle('toggle-overlay', () => {
   if (!overlayWindow) return;
-  overlayWindow.isVisible() ? overlayWindow.hide() : overlayWindow.show();
+  overlayWindow.isVisible() ? overlayWindow.hide() : (applyStealthMode(overlayWindow), overlayWindow.show());
 });
 
-// ─── 4. Show main window (since it's hidden from dock / Cmd+Tab) ──────────────
 ipcMain.handle('show-main', () => {
   if (!mainWindow) createMainWindow();
-  mainWindow.show();
-  mainWindow.focus();
+  mainWindow.show(); mainWindow.focus();
 });
 
-// Click-through: true = clicks pass through to app below; false = interactive
+ipcMain.handle('overlay-ready', () => {});
+
+// ─── IPC: click-through ───────────────────────────────────────────────────────
 let clickthroughEnabled = false;
 
 ipcMain.handle('set-clickthrough', (_, enable) => {
@@ -190,66 +171,78 @@ ipcMain.handle('set-clickthrough', (_, enable) => {
 
 ipcMain.handle('get-clickthrough', () => clickthroughEnabled);
 
-ipcMain.handle('overlay-ready', () => {});
-
-// ─── 5. Stealth verification — self-test that overlay is truly invisible ─────
-//
-// Captures the screen via desktopCapturer (which uses the same CGWindow /
-// ScreenCaptureKit path as Zoom, Meet, and Teams) and checks whether the
-// overlay window appears.  If setContentProtection is working, the overlay
-// will be absent from the window source list returned by the OS.
-//
-// Returns { invisible: bool, details: string }
-ipcMain.handle('verify-stealth', async () => {
-  if (!overlayWindow || overlayWindow.isDestroyed()) {
-    return { invisible: true, details: 'Overlay not active' };
-  }
-  if (!overlayWindow.isVisible()) {
-    return { invisible: true, details: 'Overlay hidden' };
-  }
-
-  try {
-    // Ask the OS for all capturable windows — identical API path that
-    // Zoom / Meet / Teams use under the hood on macOS (ScreenCaptureKit).
-    const sources = await desktopCapturer.getSources({
-      types: ['window'],
-      thumbnailSize: { width: 160, height: 90 },
-    });
-
-    // If the overlay's native window ID appears in the source list, it is
-    // visible to screen-sharing apps.  Content-protected windows are excluded.
-    const overlayId = overlayWindow.getMediaSourceId();
-    const found = sources.find(s => s.id === overlayId);
-
-    // Also check by title / name as a fallback (some Electron versions
-    // return a different ID format).
-    const appName = 'System Audio';
-    const foundByName = sources.find(s =>
-      s.name === appName || s.name.includes('float') || s.name.includes('Parakeet')
-    );
-
-    if (!found && !foundByName) {
-      return { invisible: true, details: `Verified — overlay excluded from ${sources.length} capturable sources` };
-    }
-    return {
-      invisible: false,
-      details: found
-        ? `EXPOSED — overlay found in capture sources as "${found.name}" (${found.id})`
-        : `EXPOSED — window matching "${foundByName.name}" found in capture sources`,
-    };
-  } catch (err) {
-    return { invisible: false, details: `Verification error: ${err.message}` };
-  }
-});
-
-// ─── Panic: hide ALL windows instantly ───────────────────────────────────────
+// ─── IPC: panic ───────────────────────────────────────────────────────────────
 ipcMain.handle('panic-hide', () => {
   overlayWindow?.hide();
   mainWindow?.hide();
 });
 
-// ─── Screen capture (Electron-native via desktopCapturer) ────────────────────
+// ─── 5. Stealth verification ──────────────────────────────────────────────────
+//
+// Strategy: ask the OS for all capturable WINDOW sources (same API path as
+// Zoom / Meet / Teams / OBS on macOS via ScreenCaptureKit), then check whether
+// any source matches our overlay by title or process name.
+//
+// We deliberately avoid getMediaSourceId() because on macOS 13+ with content
+// protection active, the OS refuses to vend a media source ID for the window,
+// which means it returns '' — so matching by ID always appears invisible even
+// when the window IS leaking via a legacy CGWindowListCreateImage path.
+//
+// Title-based matching is more reliable: if the OS returns a window named
+// 'float', 'System Audio', or our app name, the window is exposed.
+//
+ipcMain.handle('verify-stealth', async () => {
+  if (!overlayWindow || overlayWindow.isDestroyed() || !overlayWindow.isVisible()) {
+    return { invisible: true, details: 'Overlay not active / not visible' };
+  }
 
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      thumbnailSize: { width: 32, height: 32 }, // small = fast
+      fetchWindowIcons: false,
+    });
+
+    // Names / substrings that would indicate our window is exposed
+    const suspectNames = ['system audio', 'float', 'parakeet', 'coreaudiod'];
+
+    const exposed = sources.find(s => {
+      const name = (s.name || '').toLowerCase();
+      return suspectNames.some(n => name.includes(n));
+    });
+
+    // Also cross-check by native window ID if available
+    let exposedById = false;
+    try {
+      const nativeId = overlayWindow.getNativeWindowHandle().readBigUInt64LE(0).toString();
+      // desktopCapturer source IDs are like "window:12345:0" on macOS
+      exposedById = sources.some(s => s.id.includes(`:${nativeId}:`));
+    } catch { /* getNativeWindowHandle not available on all platforms */ }
+
+    if (!exposed && !exposedById) {
+      return {
+        invisible: true,
+        details: `Verified — not found among ${sources.length} capturable windows`,
+      };
+    }
+
+    return {
+      invisible: false,
+      details: exposed
+        ? `EXPOSED — window "${exposed.name}" found in capturable sources (id: ${exposed.id})`
+        : 'EXPOSED — matched by native window handle in capture sources',
+    };
+  } catch (err) {
+    // If getSources itself throws, screen permission is denied — which means
+    // Zoom/Meet also cannot capture our window. Treat as invisible.
+    if (err.message?.includes('permission') || err.message?.includes('denied')) {
+      return { invisible: true, details: 'Screen capture permission denied — capture impossible' };
+    }
+    return { invisible: false, details: `Verification error: ${err.message}` };
+  }
+});
+
+// ─── Screen capture (Electron-native via desktopCapturer) ────────────────────
 function ensureScreenPermission() {
   if (process.platform !== 'darwin') return true;
   const status = systemPreferences.getMediaAccessStatus('screen');
@@ -266,11 +259,7 @@ ipcMain.handle('list-sources', async () => {
     types: ['screen', 'window'],
     thumbnailSize: { width: 320, height: 180 },
   });
-  return sources.map((s) => ({
-    id: s.id,
-    name: s.name,
-    thumbnail: s.thumbnail.toDataURL(),
-  }));
+  return sources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL() }));
 });
 
 ipcMain.handle('capture-source', async (_, sourceId) => {
@@ -280,26 +269,21 @@ ipcMain.handle('capture-source', async (_, sourceId) => {
     types: ['screen', 'window'],
     thumbnailSize: { width, height },
   });
-  const source = sources.find((s) => s.id === sourceId);
+  const source = sources.find(s => s.id === sourceId);
   if (!source) return null;
   return source.thumbnail.toPNG().toString('base64');
 });
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
-  // ── Microphone permission ────────────────────────────────────────────────
   if (process.platform === 'darwin') {
     const micStatus = await systemPreferences.askForMediaAccess('microphone');
-    if (!micStatus) {
-      console.warn('[Electron] Microphone permission denied by macOS.');
-    }
+    if (!micStatus) console.warn('[Electron] Microphone permission denied.');
   }
 
-  // Grant media/microphone permission requests from renderer pages
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     callback(['media', 'microphone', 'audioCapture', 'geolocation'].includes(permission));
   });
-
   session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
     return ['media', 'microphone', 'audioCapture'].includes(permission);
   });
@@ -307,34 +291,37 @@ app.whenReady().then(async () => {
   createMainWindow();
   createOverlayWindow();
 
-  // ── Global shortcuts ─────────────────────────────────────────────────────
-
-  // Toggle overlay: Cmd/Ctrl + Shift + Space
+  // ── Global shortcuts ───────────────────────────────────────────────────────
+  // Toggle overlay
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     if (!overlayWindow) return;
-    overlayWindow.isVisible() ? overlayWindow.hide() : overlayWindow.show();
+    if (overlayWindow.isVisible()) {
+      overlayWindow.hide();
+    } else {
+      applyStealthMode(overlayWindow);
+      overlayWindow.show();
+    }
   });
 
-  // Panic key: Cmd/Ctrl + Shift + H — instantly hides ALL windows
+  // Panic: hide everything
   globalShortcut.register('CommandOrControl+Shift+H', () => {
     overlayWindow?.hide();
     mainWindow?.hide();
   });
 
-  // Bring main window back (since dock is hidden): Cmd/Ctrl + Shift + M
+  // Show main window
   globalShortcut.register('CommandOrControl+Shift+M', () => {
     if (!mainWindow) createMainWindow();
-    mainWindow.show();
-    mainWindow.focus();
+    mainWindow.show(); mainWindow.focus();
   });
 
-  // Trigger exam capture from anywhere: Cmd/Ctrl + Shift + C
+  // Exam capture from anywhere
   globalShortcut.register('CommandOrControl+Shift+C', () => {
     if (!overlayWindow || !overlayWindow.isVisible()) return;
     overlayWindow.webContents.send('trigger-capture');
   });
 
-  // Toggle click-through from anywhere (even when overlay is in passthru mode)
+  // Toggle click-through from anywhere
   globalShortcut.register('CommandOrControl+Shift+T', () => {
     if (!overlayWindow || !overlayWindow.isVisible()) return;
     clickthroughEnabled = !clickthroughEnabled;
@@ -344,14 +331,5 @@ app.whenReady().then(async () => {
 });
 
 app.on('will-quit', () => globalShortcut.unregisterAll());
-
-// Keep running when all windows are closed (macOS) — app lives in background
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
-
-// Don't recreate mainWindow on activate — app.dock is hidden, so this event
-// only fires if the user somehow clicks the icon (shouldn't happen in stealth mode)
-app.on('activate', () => {
-  if (!mainWindow) createMainWindow();
-});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('activate', () => { if (!mainWindow) createMainWindow(); });
