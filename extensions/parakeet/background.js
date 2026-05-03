@@ -1,133 +1,105 @@
 // Parakeet AI - Background Service Worker
-// Captures audio from specific tab without screen sharing
+// Handles tab audio capture and messaging
 
 let activeStream = null;
 let activeTabId = null;
-let audioContext = null;
-let processor = null;
 
-// Capture audio from selected tab
 async function captureTab(tabId) {
-  // Stop any existing capture
   await stopCapture();
-
+  
   try {
-    const constraints = {
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
           chromeMediaSource: 'tab',
-          chromeMediaSourceId: tabId,
+          chromeMediaSourceId: tabId
         },
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
       },
-      video: false,
-    };
-
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video: false
+    });
+    
     activeStream = stream;
     activeTabId = tabId;
-
-    // Set up audio processing
-    setupAudioProcessing(stream);
-
-    // Notify side panel
-    chrome.runtime.sendMessage({
-      type: 'CAPTURE_STARTED',
-      tabId: tabId,
-    });
-
+    
+    stream.getAudioTracks()[0].onended = () => {
+      stopCapture();
+    };
+    
     return { success: true };
   } catch (err) {
-    console.error('Tab capture failed:', err);
+    console.error('Capture error:', err);
     return { success: false, error: err.message };
   }
 }
 
-// Stop current capture
 async function stopCapture() {
   if (activeStream) {
-    activeStream.getTracks().forEach((track) => track.stop());
+    activeStream.getTracks().forEach(track => track.stop());
     activeStream = null;
   }
-  if (processor) {
-    processor.disconnect();
-    processor = null;
-  }
-  if (audioContext) {
-    await audioContext.close();
-    audioContext = null;
-  }
   activeTabId = null;
-
-  chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
 }
 
-// Set up Web Audio API for processing
-function setupAudioProcessing(stream) {
-  audioContext = new AudioContext();
-  const source = audioContext.createMediaStreamSource(stream);
-  processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-  processor.onaudioprocess = (e) => {
-    const inputData = e.inputBuffer.getChannelData(0);
-    
-    // Calculate volume level for UI
-    let sum = 0;
-    for (let i = 0; i < inputData.length; i++) {
-      sum += inputData[i] * inputData[i];
-    }
-    const rms = Math.sqrt(sum / inputData.length);
-    
-    // Send audio data to side panel
-    chrome.runtime.sendMessage({
-      type: 'AUDIO_DATA',
-      rms: rms,
-      data: Array.from(inputData.slice(0, 1024)),
-    });
-  };
-
-  source.connect(processor);
-  processor.connect(audioContext.destination);
-}
-
-// List available tabs for capture
-async function getCapturableTabs() {
-  try {
-    const tabs = await chrome.tabs.query({ audible: true, pinned: false });
+function getTabs() {
+  return chrome.tabs.query({ 
+    audible: true,
+    status: 'complete'
+  }).then(tabs => {
     return tabs.filter(tab => 
       tab.url && 
       !tab.url.startsWith('chrome://') &&
       !tab.url.startsWith('chrome-extension://') &&
-      !tab.url.startsWith('devtools://')
+      !tab.url.startsWith('devtools://') &&
+      !tab.url.startsWith('file://')
     );
-  } catch {
-    return [];
-  }
+  });
 }
 
-// Message handler
+function getStatus() {
+  return {
+    active: activeStream !== null,
+    tabId: activeTabId
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch (message.type) {
-    case 'START_CAPTURE':
-      captureTab(message.tabId).then(sendResponse);
-      return true;
-    case 'STOP_CAPTURE':
-      stopCapture().then(() => sendResponse({ success: true }));
-      return true;
-    case 'GET_TABS':
-      getCapturableTabs().then(sendResponse);
-      return true;
-    case 'GET_STATUS':
-      sendResponse({
-        active: activeStream !== null,
-        tabId: activeTabId,
-      });
-      break;
+  const handlers = {
+    START_CAPTURE: async () => {
+      const result = await captureTab(message.tabId);
+      sendResponse(result);
+    },
+    STOP_CAPTURE: async () => {
+      await stopCapture();
+      sendResponse({ success: true });
+    },
+    GET_TABS: async () => {
+      const tabs = await getTabs();
+      sendResponse(tabs);
+    },
+    GET_STATUS: async () => {
+      sendResponse(getStatus());
+    }
+  };
+  
+  if (handlers[message.type]) {
+    handlers[message.type]();
+    return true;
   }
 });
 
-// Handle tab close to stop capture
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener(tabId => {
   if (tabId === activeTabId) {
     stopCapture();
+    chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.audible === false && tabId === activeTabId) {
+    stopCapture();
+    chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
   }
 });

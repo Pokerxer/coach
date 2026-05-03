@@ -1,151 +1,349 @@
-// Parakeet AI - Side Panel
+// Parakeet AI - Side Panel (Full Functionality)
 
-let currentTabId = null;
-let isCapturing = false;
-let autoPaste = false;
+(function() {
+  'use strict';
 
-// DOM elements
-const captureBtn = document.getElementById('capture-btn');
-const tabSelect = document.getElementById('tab-select');
-const volumeBar = document.getElementById('volume-bar');
-const statusEl = document.getElementById('status');
-const answersList = document.getElementById('answers-list');
-const autoPasteCheck = document.getElementById('auto-paste');
+  // State
+  let isCapturing = false;
+  let currentTabId = null;
+  let autoPaste = false;
+  let clickthrough = false;
+  let stealthMode = false;
+  let transcript = [];
+  let answers = [];
+  let audioContext = null;
+  let processor = null;
 
-// Initialize
-async function init() {
-  await loadTabs();
-  await loadSettings();
-  
-  // Listen for messages from background
-  chrome.runtime.onMessage.addListener((message) => {
-    handleMessage(message);
-  });
-}
+  // DOM Elements
+  const $ = id => document.getElementById(id);
+  const captureBtn = $('capture-btn');
+  const tabSelect = $('tab-select');
+  const refreshBtn = $('refresh-tabs');
+  const statusEl = $('status');
+  const volumeBar = $('volume-bar');
+  const volumeValue = $('volume-value');
+  const transcriptList = $('transcript-list');
+  const answersList = $('answers-list');
+  const autoPasteBtn = $('auto-paste-btn');
+  const autoPasteToggle = $('auto-paste-toggle');
+  const clickthroughBtn = $('clickthrough-btn');
+  const clickthroughToggle = $('clickthrough-toggle');
+  const stealthBtn = $('stealth-btn');
+  const stealthToggle = $('stealth-toggle');
+  const clearTranscriptBtn = $('clear-transcript');
+  const modelBadge = $('model-badge');
 
-// Load available tabs
-async function loadTabs() {
-  try {
-    const tabs = await chrome.runtime.sendMessage({ type: 'GET_TABS' });
-    tabSelect.innerHTML = '<option value="">Select a tab...</option>';
-    tabs.forEach((tab) => {
-      const option = document.createElement('option');
-      option.value = tab.id;
-      option.textContent = `${tab.title.substring(0, 50)} (${new URL(tab.url).hostname})`;
-      tabSelect.appendChild(option);
+  // Initialize
+  async function init() {
+    await loadSettings();
+    await loadTabs();
+    setupEventListeners();
+    setupKeyboardShortcuts();
+    startStatusPolling();
+  }
+
+  // Load tabs
+  async function loadTabs() {
+    try {
+      const tabs = await chrome.runtime.sendMessage({ type: 'GET_TABS' });
+      tabSelect.innerHTML = '<option value="">Select a tab...</option>';
+      
+      tabs.forEach(tab => {
+        const option = document.createElement('option');
+        option.value = tab.id;
+        const url = new URL(tab.url);
+        option.textContent = `${tab.title.substring(0, 35)} (${url.hostname})`;
+        tabSelect.appendChild(option);
+      });
+    } catch (err) {
+      console.error('Failed to load tabs:', err);
+    }
+  }
+
+  // Load settings from storage
+  async function loadSettings() {
+    try {
+      const result = await chrome.storage.local.get(['autoPaste', 'clickthrough', 'stealthMode']);
+      autoPaste = result.autoPaste || false;
+      clickthrough = result.clickthrough || false;
+      stealthMode = result.stealthMode || false;
+      
+      autoPasteToggle.textContent = autoPaste ? '●' : '○';
+      clickthroughToggle.textContent = clickthrough ? '●' : '○';
+      stealthToggle.textContent = stealthMode ? '●' : '○';
+    } catch {}
+  }
+
+  // Save settings
+  async function saveSettings() {
+    try {
+      await chrome.storage.local.set({ autoPaste, clickthrough, stealthMode });
+    } catch {}
+  }
+
+  // Setup event listeners
+  function setupEventListeners() {
+    captureBtn.addEventListener('click', toggleCapture);
+    tabSelect.addEventListener('change', onTabChange);
+    refreshBtn.addEventListener('click', loadTabs);
+    
+    autoPasteBtn.addEventListener('click', () => {
+      autoPaste = !autoPaste;
+      autoPasteToggle.textContent = autoPaste ? '●' : '○';
+      saveSettings();
     });
-  } catch (err) {
-    console.error('Failed to load tabs:', err);
-  }
-}
 
-// Load settings
-async function loadSettings() {
-  try {
-    const result = await chrome.storage.local.get(['autoPaste']);
-    autoPaste = result.autoPaste ?? false;
-    autoPasteCheck.checked = autoPaste;
-  } catch {}
-}
+    clickthroughBtn.addEventListener('click', async () => {
+      clickthrough = !clickthrough;
+      clickthroughToggle.textContent = clickthrough ? '●' : '○';
+      saveSettings();
+      if (currentTabId) {
+        await chrome.tabs.sendMessage(currentTabId, { 
+          type: 'SET_CLICKTHROUGH', 
+          enabled: clickthrough 
+        });
+      }
+    });
 
-// Save settings
-async function saveSettings() {
-  try {
-    await chrome.storage.local.set({ autoPaste });
-  } catch {}
-}
+    stealthBtn.addEventListener('click', async () => {
+      stealthMode = !stealthMode;
+      stealthToggle.textContent = stealthMode ? '●' : '○';
+      saveSettings();
+      if (currentTabId) {
+        await chrome.tabs.sendMessage(currentTabId, { 
+          type: 'SET_STEALTH', 
+          enabled: stealthMode 
+        });
+      }
+    });
 
-// Handle messages from background
-function handleMessage(message) {
-  switch (message.type) {
-    case 'CAPTURE_STARTED':
-      isCapturing = true;
-      currentTabId = message.tabId;
-      updateUI();
-      break;
-    case 'CAPTURE_STOPPED':
-      isCapturing = false;
-      currentTabId = null;
-      updateUI();
-      break;
-    case 'AUDIO_DATA':
-      updateVolume(message.rms);
-      break;
-  }
-}
-
-// Update UI state
-function updateUI() {
-  if (isCapturing) {
-    captureBtn.textContent = 'Stop Capture';
-    captureBtn.classList.add('recording');
-    statusEl.textContent = 'Capturing...';
-    statusEl.classList.add('active');
-  } else {
-    captureBtn.textContent = 'Start Capture';
-    captureBtn.classList.remove('recording');
-    statusEl.textContent = 'Ready';
-    statusEl.classList.remove('active');
-  }
-}
-
-// Update volume meter
-function updateVolume(rms) {
-  const percent = Math.min(100, rms * 2000);
-  volumeBar.style.width = `${percent}%`;
-  
-  // Update color based on level
-  if (percent > 70) {
-    volumeBar.classList.add('high');
-  } else if (percent > 30) {
-    volumeBar.classList.remove('high');
-  }
-}
-
-// Add answer to list
-function addAnswer(text) {
-  const empty = answersList.querySelector('.empty-state');
-  if (empty) empty.remove();
-  
-  const answer = document.createElement('div');
-  answer.className = 'answer-item';
-  answer.textContent = text;
-  answersList.prepend(answer);
-  
-  // Auto-paste if enabled
-  if (autoPaste && currentTabId) {
-    chrome.tabs.sendMessage(currentTabId, {
-      type: 'PASTE_TEXT',
-      text: text,
+    clearTranscriptBtn.addEventListener('click', () => {
+      transcript = [];
+      answers = [];
+      renderTranscript();
+      renderAnswers();
     });
   }
-}
 
-// Event listeners
-captureBtn.addEventListener('click', async () => {
-  if (isCapturing) {
-    await chrome.runtime.sendMessage({ type: 'STOP_CAPTURE' });
-  } else {
+  // Keyboard shortcuts
+  function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', async (e) => {
+      if (e.altKey && e.key === 'p') {
+        e.preventDefault();
+        toggleCapture();
+      }
+    });
+  }
+
+  // Toggle capture
+  async function toggleCapture() {
+    if (isCapturing) {
+      await stopCapture();
+    } else {
+      await startCapture();
+    }
+  }
+
+  // Start capture
+  async function startCapture() {
     const tabId = parseInt(tabSelect.value);
     if (!tabId) {
-      alert('Please select a tab first');
+      statusEl.textContent = 'Select a tab first';
+      statusEl.classList.add('error');
       return;
     }
-    await chrome.runtime.sendMessage({ type: 'START_CAPTURE', tabId });
+
+    try {
+      const result = await chrome.runtime.sendMessage({ 
+        type: 'START_CAPTURE', 
+        tabId 
+      });
+
+      if (result.success) {
+        isCapturing = true;
+        currentTabId = tabId;
+        updateUI();
+        statusEl.textContent = 'Capturing';
+        statusEl.classList.remove('error');
+        
+        if (stealthMode && currentTabId) {
+          await chrome.tabs.sendMessage(currentTabId, { 
+            type: 'SET_STEALTH', 
+            enabled: true 
+          });
+        }
+      } else {
+        statusEl.textContent = result.error || 'Failed';
+        statusEl.classList.add('error');
+      }
+    } catch (err) {
+      statusEl.textContent = err.message;
+      statusEl.classList.add('error');
+    }
   }
-});
 
-tabSelect.addEventListener('change', async () => {
-  const tabId = parseInt(tabSelect.value);
-  if (tabId && !isCapturing) {
-    currentTabId = tabId;
+  // Stop capture
+  async function stopCapture() {
+    try {
+      await chrome.runtime.sendMessage({ type: 'STOP_CAPTURE' });
+    } catch {}
+    
+    isCapturing = false;
+    currentTabId = null;
+    updateUI();
+    statusEl.textContent = 'Ready';
   }
-});
 
-autoPasteCheck.addEventListener('change', () => {
-  autoPaste = autoPasteCheck.checked;
-  saveSettings();
-});
+  // Tab change handler
+  async function onTabChange() {
+    const tabId = parseInt(tabSelect.value);
+    if (tabId && isCapturing && tabId !== currentTabId) {
+      await stopCapture();
+      tabSelect.value = tabId;
+      await startCapture();
+    }
+  }
 
-// Start
-init();
+  // Update UI
+  function updateUI() {
+    const btnText = captureBtn.querySelector('.btn-text');
+    const btnIcon = captureBtn.querySelector('.btn-icon');
+    
+    if (isCapturing) {
+      captureBtn.classList.add('recording');
+      btnText.textContent = 'Stop Capture';
+      btnIcon.textContent = '■';
+      statusEl.classList.add('active');
+      statusEl.textContent = 'Capturing...';
+    } else {
+      captureBtn.classList.remove('recording');
+      btnText.textContent = 'Start Capture';
+      btnIcon.textContent = '●';
+      statusEl.classList.remove('active');
+      statusEl.textContent = 'Ready';
+    }
+
+    tabSelect.disabled = isCapturing;
+    refreshBtn.disabled = isCapturing;
+  }
+
+  // Render transcript
+  function renderTranscript() {
+    if (transcript.length === 0) {
+      transcriptList.innerHTML = '<p class="empty-state">No transcript yet. Start capture to begin.</p>';
+      return;
+    }
+
+    transcriptList.innerHTML = transcript.map(item => `
+      <div class="transcript-item ${item.speaker === 'interviewer' ? 'interviewer' : 'candidate'}">
+        <span class="speaker">${item.speaker === 'interviewer' ? 'Interviewer' : 'You'}</span>
+        <span class="time">${item.time}</span>
+        <p>${item.text}</p>
+      </div>
+    `).join('');
+
+    transcriptList.scrollTop = transcriptList.scrollHeight;
+  }
+
+  // Render answers
+  function renderAnswers() {
+    if (answers.length === 0) {
+      answersList.innerHTML = '<p class="empty-state">AI answers will appear here</p>';
+      return;
+    }
+
+    answersList.innerHTML = answers.map(answer => `
+      <div class="answer-item" data-answer="${encodeURIComponent(answer.text)}">
+        <div class="answer-header">
+          <span class="question">${answer.question}</span>
+          <button class="copy-btn" title="Copy">Copy</button>
+        </div>
+        <p class="answer-text">${answer.text}</p>
+      </div>
+    `).join('');
+
+    // Add copy handlers
+    answersList.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const text = decodeURIComponent(btn.closest('.answer-item').dataset.answer);
+        navigator.clipboard.writeText(text);
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
+      });
+    });
+
+    answersList.querySelectorAll('.answer-item').forEach(item => {
+      item.addEventListener('click', () => {
+        if (autoPaste && currentTabId) {
+          const text = decodeURIComponent(item.dataset.answer);
+          chrome.tabs.sendMessage(currentTabId, { 
+            type: 'PASTE_TEXT', 
+            text 
+          });
+        }
+      });
+    });
+  }
+
+  // Status polling
+  function startStatusPolling() {
+    setInterval(async () => {
+      if (!isCapturing) return;
+      
+      try {
+        const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+        if (!status.active && isCapturing) {
+          isCapturing = false;
+          currentTabId = null;
+          updateUI();
+          statusEl.textContent = 'Tab closed';
+        }
+      } catch {}
+    }, 2000);
+  }
+
+  // Handle messages from background
+  chrome.runtime.onMessage.addListener(message => {
+    switch (message.type) {
+      case 'TRANSCRIPT_UPDATE':
+        transcript = message.transcript || [];
+        renderTranscript();
+        break;
+      case 'ANSWER_GENERATED':
+        if (message.answer) {
+          answers.unshift(message.answer);
+          renderAnswers();
+          modelBadge.textContent = 'AI Active';
+          
+          if (autoPaste && currentTabId) {
+            chrome.tabs.sendMessage(currentTabId, { 
+              type: 'PASTE_TEXT', 
+              text: message.answer.text 
+            });
+          }
+        }
+        break;
+      case 'CAPTURE_STOPPED':
+        isCapturing = false;
+        currentTabId = null;
+        updateUI();
+        statusEl.textContent = 'Ready';
+        modelBadge.textContent = 'Ready';
+        break;
+      case 'AUDIO_LEVEL':
+        const level = Math.min(100, message.level * 100);
+        volumeBar.style.width = `${level}%`;
+        volumeValue.textContent = `${Math.round(level)}%`;
+        
+        if (level > 70) {
+          volumeBar.classList.add('high');
+        } else {
+          volumeBar.classList.remove('high');
+        }
+        break;
+    }
+  });
+
+  // Start
+  init();
+})();
