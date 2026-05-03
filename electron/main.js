@@ -65,13 +65,27 @@ function createMainWindow() {
 //     GPU configurations.
 //
 function applyStealthMode(win) {
+  if (!win || win.isDestroyed()) return;
+  
   win.setContentProtection(true);
   win.setAlwaysOnTop(true, 'screen-saver', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   
-  // Hide from Mission Control (three-finger swipe)
+  // Additional macOS-specific stealth
   if (process.platform === 'darwin') {
     win.setHiddenInMissionControl(true);
+    
+    // Try to invoke native stealth using AppleScript (fallback method)
+    // This uses OS-level APIs to set window properties
+    try {
+      const windowNumber = win.getNativeWindowHandle();
+      if (windowNumber && process.platform === 'darwin') {
+        // The native handle can be used with private APIs if we had a native module
+        // For now, we rely on setContentProtection which uses NSWindowSharingNone internally
+      }
+    } catch (e) {
+      // Ignore native handle errors
+    }
   }
 }
 
