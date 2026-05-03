@@ -93,10 +93,10 @@ export function StealthModeWrapper({ children }: { children: React.ReactNode }) 
         pipWindowRef.current = pip;
 
         const container = pip.document.createElement('div');
-        container.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.60);margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        container.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.95);margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
 
         const header = pip.document.createElement('div');
-        header.style.cssText = 'background:rgba(240,240,240,0.60);padding:8px 12px;font-size:11px;color:#555;border-bottom:1px solid #ccc;display:flex;gap:10px';
+        header.style.cssText = 'background:rgba(240,240,240,0.95);padding:8px 12px;font-size:11px;color:#555;border-bottom:1px solid #ccc;display:flex;gap:10px';
         header.innerHTML = '<span>📄</span><span style="color:#333">Notes</span>';
 
         const content = pip.document.createElement('div');
