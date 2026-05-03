@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parakeet AI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Parakeet AI</h1>
+      <span class="status" id="status">Ready</span>
+    </header>
+
+    <section class="capture-section">
+      <button id="capture-btn" class="btn btn-primary">
+        Start Capture
+      </button>
+      
+      <select id="tab-select" class="select">
+        <option value="">Select a tab...</option>
+      </select>
+    </section>
+
+    <section class="volume-section">
+      <div class="volume-meter">
+        <div class="volume-bar" id="volume-bar"></div>
+      </div>
+      <span class="volume-label">Audio Level</span>
+    </section>
+
+    <section class="answers-section">
+      <h2>Answers</h2>
+      <div id="answers-list" class="answers-list">
+        <p class="empty-state">Start capture to see AI answers here</p>
+      </div>
+    </section>
+
+    <section class="settings">
+      <label class="checkbox-label">
+        <input type="checkbox" id="auto-paste">
+        Auto-paste answers
+      </label>
+    </section>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

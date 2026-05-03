@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Parakeet AI",
+  "version": "1.0.0",
+  "description": "Stealth interview assistant - captures tab audio only, no screen share",
+  "permissions": [
+    "tabCapture",
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "Parakeet AI"
+  }
+}
