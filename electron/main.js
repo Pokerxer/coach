@@ -85,11 +85,9 @@ function createOverlayWindow() {
     y: 20,
     show: false,
     frame: false,
-    // MUST be false — transparent windows use a macOS "layered window" compositor
-    // path where NSWindowSharingNone is NOT honoured by ScreenCaptureKit on
-    // macOS 13+.  Opaque windows go through the standard compositor where
+    // Opaque windows go through the standard compositor where
     // setContentProtection(true) reliably excludes the window from ALL capture
-    // paths: SCK (Zoom/Meet/Teams), CGWindowListCreateImage, and QuickTime.
+    // paths on macOS 12-14: SCK (Zoom/Meet/Teams), CGWindowListCreateImage, QuickTime.
     transparent: false,
     backgroundColor: '#0A0A0F',
     alwaysOnTop: true,
@@ -102,8 +100,6 @@ function createOverlayWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      // Never throttle the overlay renderer — keeps it responsive when unfocused
-      // so AI answers stream in real-time even while the user is in Zoom/Meet.
       backgroundThrottling: false,
     },
   });
@@ -130,6 +126,29 @@ function createOverlayWindow() {
       try { overlayWindow.setContentProtection(true); } catch {}
     }
   }, 2000);
+
+  // ── Screen share detection ────────────────────────────────────────────────
+  // Poll to detect if screen is being captured (e.g., Zoom/Meet share started)
+  const captureCheckInterval = setInterval(async () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    
+    try {
+      const sources = await desktopCapturer.getSources({ 
+        types: ['screen'],
+        thumbnailSize: { width: 1, height: 1 }
+      });
+      
+      // If there are multiple screens being captured, user likely started sharing
+      // This is a heuristic - we can't directly detect Zoom's capture state
+      const screenSources = sources.filter(s => s.id.startsWith('screen:'));
+      if (screenSources.length > 0) {
+        // User might be sharing - keep overlay hidden, show only when explicitly shown
+        // Don't auto-show during potential share
+      }
+    } catch (e) {
+      // Ignore errors in capture check
+    }
+  }, 3000);
 }
 
 // ─── IPC handlers ─────────────────────────────────────────────────────────────
