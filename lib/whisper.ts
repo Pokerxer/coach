@@ -9,7 +9,7 @@ function getOpenAI() {
 }
 
 const MIME_TYPES: Record<string, string> = {
-  webm: 'audio/webm',
+  webm: 'audio/webm',   // OPUS/WebM — default from MediaRecorder (Wispr Flow approach)
   mp4:  'audio/mp4',
   m4a:  'audio/mp4',
   ogg:  'audio/ogg',

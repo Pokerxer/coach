@@ -108,6 +108,47 @@ function MarkdownBlock({ text, streaming, accent = 'cyan' }: { text: string; str
 
   while (i < lines.length) {
     const line = lines[i];
+    
+    // Table (| col1 | col2 | or |---)
+    const tableMatch = line.match(/^\|.+\|$/);
+    if (tableMatch && !line.includes('---')) {
+      const tableLines: string[] = [];
+      while (i < lines.length && lines[i].match(/^\|.+\|$/)) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      if (tableLines.length > 0) {
+        const rows = tableLines.map(row => row.split('|').filter(c => c.trim()));
+        const tbody = rows.slice(1).map(row => (
+          <tr key={i + row[0]}>
+            {row.map((cell, c) => (
+              <td key={c} className={`px-3 py-2 text-white/80 text-[20px] ${c === 0 ? 'font-medium' : ''} border-l border-white/10`}>
+                {cell.trim()}
+              </td>
+            ))}
+          </tr>
+        ));
+        nodes.push(
+          <table key={i} className="w-full text-left border border-white/10 rounded my-2 overflow-hidden text-sm">
+            <thead>
+              <tr className="bg-white/5">
+                {rows[0]?.map((h, c) => (
+                  <th key={c} className="px-3 py-2.5 text-white/60 text-[20px] font-medium border-b border-white/10">
+                    {h.trim()}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>{tbody}</tbody>
+          </table>
+        );
+      }
+      continue;
+    }
+    
+    // Skip |---| table separator
+    if (line.match(/^\|?[-:]+\|/)) { i++; continue; }
+    
     const fence = line.match(/^```(\w*)/);
     if (fence) {
       const lang = fence[1] || 'js';
@@ -117,15 +158,15 @@ function MarkdownBlock({ text, streaming, accent = 'cyan' }: { text: string; str
       nodes.push(<CodeBlock key={i} lang={lang} code={codeLines.join('\n')} accent={accent} />);
       i++; continue;
     }
-    if (line.startsWith('### ')) { nodes.push(<p key={i} className="text-white font-bold text-[14px] mt-3 mb-1">{inline(line.slice(4))}</p>); i++; continue; }
-    if (line.startsWith('## '))  { nodes.push(<p key={i} className="text-white font-black text-[15px] mt-4 mb-1 border-b border-white/10 pb-1">{inline(line.slice(3))}</p>); i++; continue; }
-    if (line.startsWith('# '))   { nodes.push(<p key={i} className="text-white font-black text-[16px] mt-4 mb-1">{inline(line.slice(2))}</p>); i++; continue; }
+    if (line.startsWith('### ')) { nodes.push(<p key={i} className="text-white font-bold text-[28px] mt-3 mb-1">{inline(line.slice(4))}</p>); i++; continue; }
+    if (line.startsWith('## '))  { nodes.push(<p key={i} className="text-white font-black text-[30px] mt-4 mb-1 border-b border-white/10 pb-1">{inline(line.slice(3))}</p>); i++; continue; }
+    if (line.startsWith('# '))   { nodes.push(<p key={i} className="text-white font-extrabold text-[32px] mt-4 mb-1">{inline(line.slice(2))}</p>); i++; continue; }
     const num = line.match(/^(\d+)\.\s+(.*)/);
-    if (num) { nodes.push(<div key={i} className="flex gap-2 items-start my-1"><span className="text-cyan-400/50 font-mono text-[11px] mt-0.5 shrink-0 w-4 text-right">{num[1]}.</span><span className="text-white/85 text-[13px] leading-relaxed">{inline(num[2])}</span></div>); i++; continue; }
+    if (num) { nodes.push(<div key={i} className="flex gap-2 items-start my-1"><span className="text-cyan-400/50 font-mono text-[22px] mt-0.5 shrink-0 w-4 text-right">{num[1]}.</span><span className="text-white/85 text-[22px] leading-relaxed">{inline(num[2])}</span></div>); i++; continue; }
     const bul = line.match(/^[-*•]\s+(.*)/);
-    if (bul) { nodes.push(<div key={i} className="flex gap-2 items-start my-1"><span className={`mt-1.5 shrink-0 text-[9px] ${accent === 'violet' ? 'text-violet-400/70' : 'text-cyan-400/70'}`}>▸</span><span className="text-white/85 text-[13px] leading-relaxed">{inline(bul[1])}</span></div>); i++; continue; }
+    if (bul) { nodes.push(<div key={i} className="flex gap-2 items-start my-1"><span className={`mt-1.5 shrink-0 text-[18px] ${accent === 'violet' ? 'text-violet-400/70' : 'text-cyan-400/70'}`}>▸</span><span className="text-white/85 text-[22px] leading-relaxed">{inline(bul[1])}</span></div>); i++; continue; }
     if (!line.trim()) { nodes.push(<div key={i} className="h-1.5" />); i++; continue; }
-    nodes.push(<p key={i} className="text-white/85 text-[13px] leading-relaxed my-0.5">{inline(line)}</p>);
+    nodes.push(<p key={i} className="text-white/85 text-[22px] leading-relaxed my-0.5">{inline(line)}</p>);
     i++;
   }
 
@@ -149,6 +190,10 @@ interface ElectronAPI {
   toggleOverlay: () => void;
   setClickthrough: (enable: boolean) => void;
   overlayReady: () => void;
+  verifyStealth: () => Promise<{ invisible: boolean; details: string }>;
+  panicHide: () => void;
+  showMain: () => void;
+  minimizeOverlay: () => void;
 }
 function getElectronAPI(): ElectronAPI | null {
   const api = (window as any).electronAPI;
@@ -223,6 +268,7 @@ export default function FloatPage() {
   // ── Shared ────────────────────────────────────────────────────────────────
   const [clickThrough, setClickThrough] = useState(false);
   const [isElectron, setIsElectron]     = useState(false);
+  const [stealthStatus, setStealthStatus] = useState<'checking' | 'ok' | 'exposed' | 'idle'>('idle');
 
   const scrollRef          = useRef<HTMLDivElement>(null);
   const wasGeneratingRef   = useRef(false);
@@ -231,6 +277,27 @@ export default function FloatPage() {
   const prevAnswerRef      = useRef('');
 
   useEffect(() => { setIsElectron(!!(window as any).electronAPI?.isElectron); }, []);
+
+  // ── Stealth verification: self-test on mount, then every 30 s ─────────────
+  const runStealthCheck = useCallback(async () => {
+    const eApi = getElectronAPI();
+    if (!eApi?.verifyStealth) return;
+    setStealthStatus('checking');
+    try {
+      const result = await eApi.verifyStealth();
+      setStealthStatus(result.invisible ? 'ok' : 'exposed');
+      if (!result.invisible) console.warn('[stealth]', result.details);
+    } catch { setStealthStatus('idle'); }
+  }, []);
+
+  useEffect(() => {
+    if (!isElectron) return;
+    // Initial check after a short delay (let window settle)
+    const initTimer = setTimeout(runStealthCheck, 3000);
+    // Periodic re-verification every 30 seconds
+    const periodic = setInterval(runStealthCheck, 30_000);
+    return () => { clearTimeout(initTimer); clearInterval(periodic); };
+  }, [isElectron, runStealthCheck]);
 
   // ── BroadcastChannel: receive interview state ─────────────────────────────
   useEffect(() => {
@@ -281,7 +348,7 @@ export default function FloatPage() {
     const el = scrollRef.current;
     if (!el || topMode === 'exam') return;
     if (isGeneratingAnswer) {
-      el.scrollTop = el.scrollHeight;
+      el.scrollTop = 0;           // jump to top so user reads from the question down
       wasGeneratingRef.current = true;
       userScrolledRef.current = false;
     } else if (wasGeneratingRef.current && currentAnswer !== prevAnswerRef.current) {
@@ -306,6 +373,15 @@ export default function FloatPage() {
     setClickThrough(next);
     (window as any).electronAPI?.setClickthrough(next);
   };
+
+  // Sync click-through state toggled via Cmd+Shift+T global shortcut
+  useEffect(() => {
+    const eApi = (window as any).electronAPI;
+    if (!eApi?.onClickthroughChanged) return;
+    const handler = (val: boolean) => setClickThrough(val);
+    eApi.onClickthroughChanged(handler);
+    return () => eApi.offClickthroughChanged(handler);
+  }, []);
 
   // ── Interview: scan code ──────────────────────────────────────────────────
   const scanCode = async () => {
@@ -460,6 +536,7 @@ export default function FloatPage() {
       const dec    = new TextDecoder();
       let answer   = '';
       userScrolledRef.current = false;
+      if (scrollRef.current) scrollRef.current.scrollTop = 0; // start from top
 
       while (true) {
         const { done, value } = await reader.read();
@@ -475,7 +552,6 @@ export default function FloatPage() {
             } else if (evt.token) {
               answer += evt.token;
               setExamAnswer(answer);
-              if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
             }
           } catch {}
         }
@@ -528,24 +604,64 @@ export default function FloatPage() {
   const busy    = examCapturing || examStreaming;
 
   return (
-    <div className="w-screen h-screen flex flex-col overflow-hidden bg-transparent select-none">
+    <div className="w-screen h-screen flex flex-col overflow-hidden select-none" style={{ background: '#0A0A0F', opacity: clickThrough ? 0.45 : 1, transition: 'opacity 0.2s' }}>
       <style>{`
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
         @keyframes spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; }
         ::-webkit-scrollbar { display: none; }
-        body { background: transparent !important; }
+        body { margin: 0; background: #0A0A0F !important; }
       `}</style>
 
       {/* ── Title bar ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-        <div className="flex gap-0.5" style={{ WebkitAppRegion: 'no-drag' } as any}>
-          <span className="w-2.5 h-2.5 rounded-full bg-red-500/80 cursor-pointer" onClick={() => (window as any).electronAPI?.hideOverlay()} title="Hide" />
-          <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
-          <span className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
+      <div
+        className="flex items-center gap-2 px-3 py-2.5 shrink-0 border-b border-white/5"
+        style={{ WebkitAppRegion: 'drag', cursor: 'grab' } as any}
+        onMouseEnter={() => { if (clickThrough) (window as any).electronAPI?.setClickthrough(false); }}
+        onMouseLeave={() => { if (clickThrough) (window as any).electronAPI?.setClickthrough(true); }}
+      >
+        {/* Traffic lights — always no-drag so clicks register */}
+        <div className="flex gap-1.5 group" style={{ WebkitAppRegion: 'no-drag' } as any}>
+          {/* Red — hide window */}
+          <span
+            className="w-3 h-3 rounded-full bg-red-500 cursor-pointer flex items-center justify-center hover:bg-red-400 transition-colors"
+            onClick={() => (window as any).electronAPI?.hideOverlay()}
+            title="Hide  (⌘⇧Space to restore)"
+          >
+            <span className="hidden group-hover:block text-[7px] text-red-900 font-bold leading-none">✕</span>
+          </span>
+          {/* Yellow — minimize to dock */}
+          <span
+            className="w-3 h-3 rounded-full bg-yellow-500 cursor-pointer flex items-center justify-center hover:bg-yellow-400 transition-colors"
+            onClick={() => (window as any).electronAPI?.minimizeOverlay()}
+            title="Minimize to dock"
+          >
+            <span className="hidden group-hover:block text-[7px] text-yellow-900 font-bold leading-none">–</span>
+          </span>
+          {/* Green — live stealth indicator with self-verification */}
+          <span
+            onClick={runStealthCheck}
+            className={`w-3 h-3 rounded-full cursor-pointer flex items-center justify-center transition-colors ${
+              stealthStatus === 'ok'       ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.6)]' :
+              stealthStatus === 'exposed'  ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse' :
+              stealthStatus === 'checking' ? 'bg-yellow-400 shadow-[0_0_4px_rgba(250,204,21,0.4)]' :
+              isElectron                   ? 'bg-green-400 shadow-[0_0_5px_rgba(74,222,128,0.5)]' :
+                                             'bg-green-500/30'
+            }`}
+            title={
+              stealthStatus === 'ok'       ? 'Stealth VERIFIED — invisible to Zoom, Meet, Teams, OBS\nClick to re-verify' :
+              stealthStatus === 'exposed'  ? '⚠️ EXPOSED — overlay may be visible to screen capture!\nClick to re-check' :
+              stealthStatus === 'checking' ? 'Verifying stealth…' :
+              isElectron                   ? 'Stealth active — click to verify' :
+                                             'Stealth requires Electron app'
+            }
+          >
+            {/* Shield icon on hover */}
+            <span className="hidden group-hover:block text-[6px] text-green-900 font-bold leading-none">🛡</span>
+          </span>
         </div>
 
-        {/* Mode toggle */}
+        {/* Mode toggle — centred, no-drag */}
         <div className="flex items-center bg-white/5 rounded-lg p-0.5 gap-0.5 mx-auto" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <button
             onClick={() => setTopMode('interview')}
@@ -561,13 +677,36 @@ export default function FloatPage() {
           </button>
         </div>
 
+        {/* Click-through toggle */}
         {isElectron && (
           <button
             onClick={toggleClickthrough}
             style={{ WebkitAppRegion: 'no-drag' } as any}
-            className={`text-[10px] px-2 py-0.5 rounded-full border font-mono transition-colors ${clickThrough ? 'border-cyan-400/50 text-cyan-400 bg-cyan-400/10' : 'border-white/20 text-white/30'}`}
+            title={clickThrough ? 'Click-through ON — clicks pass to app below\n⌘⇧T to toggle' : 'Click-through OFF — window is interactive\n⌘⇧T to toggle'}
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-mono font-bold transition-all ${
+              clickThrough
+                ? 'border-cyan-400/60 text-cyan-300 bg-cyan-400/15 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
+                : 'border-white/15 text-white/35 bg-white/5 hover:border-white/30 hover:text-white/55'
+            }`}
           >
-            {clickThrough ? 'passthru' : '···'}
+            {/* Simple eye icon: open = interactive, strikethrough = passthru */}
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              {clickThrough ? (
+                // Eye with slash = passthru (clicks go through)
+                <>
+                  <path d="M1 6s1.5-3 5-3 5 3 5 3-1.5 3-5 3-5-3-5-3z" />
+                  <circle cx="6" cy="6" r="1.2" fill="currentColor" stroke="none" />
+                  <line x1="2" y1="2" x2="10" y2="10" strokeWidth="1.5" />
+                </>
+              ) : (
+                // Open eye = interactive
+                <>
+                  <path d="M1 6s1.5-3 5-3 5 3 5 3-1.5 3-5 3-5-3-5-3z" />
+                  <circle cx="6" cy="6" r="1.2" fill="currentColor" stroke="none" />
+                </>
+              )}
+            </svg>
+            <span>{clickThrough ? 'passthru' : 'focus'}</span>
           </button>
         )}
       </div>
@@ -630,7 +769,7 @@ export default function FloatPage() {
           </div>
 
           {/* ── Sticky capture bar (always visible at bottom) ── */}
-          <div className="shrink-0 px-3 pb-3 pt-2 border-t border-white/8 bg-black/20 space-y-2">
+          <div className="shrink-0 px-3 pb-3 pt-2 border-t border-white/8 bg-[#08080d] space-y-2">
             {/* Subject + share status */}
             <div className="flex items-center gap-2">
               <button
@@ -765,7 +904,7 @@ export default function FloatPage() {
           </div>
 
           {/* ── Sticky capture bar ── */}
-          <div className="shrink-0 px-3 pb-3 pt-2 border-t border-white/8 bg-black/20">
+          <div className="shrink-0 px-3 pb-3 pt-2 border-t border-white/8 bg-[#08080d]">
             <button
               onClick={scanCode}
               disabled={codeScanning}

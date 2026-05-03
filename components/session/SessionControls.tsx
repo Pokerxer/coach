@@ -2,7 +2,7 @@
 
 import { useSessionStore } from '@/store/session';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, Square, Zap, Code2, PictureInPicture2 } from 'lucide-react';
+import { Mic, MicOff, Square, Zap, Code2, PictureInPicture2, ScanSearch, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // In Electron: triggers the native protected overlay window.
@@ -34,9 +34,11 @@ interface SessionControlsProps {
   onToggleMute: () => void;
   onTriggerManual: () => void;
   onStart: () => void;
+  onCaptureScreen?: () => void;
+  isCapturing?: boolean;
 }
 
-export function SessionControls({ onStop, onToggleMute, onTriggerManual, onStart }: SessionControlsProps) {
+export function SessionControls({ onStop, onToggleMute, onTriggerManual, onStart, onCaptureScreen, isCapturing }: SessionControlsProps) {
   const { isRecording, isMuted, codingMode, setCodingMode } = useSessionStore();
 
   return (
@@ -49,6 +51,23 @@ export function SessionControls({ onStop, onToggleMute, onTriggerManual, onStart
 
       <div className="flex items-center gap-3">
         <FloatButton />
+
+        {/* Screen capture */}
+        {onCaptureScreen && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onCaptureScreen}
+            disabled={isCapturing}
+            className="text-xs border-violet-500/30 text-violet-300 hover:border-violet-500/60 hover:text-violet-200"
+            title="Capture screen and solve the question shown"
+          >
+            {isCapturing
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              : <ScanSearch className="h-3.5 w-3.5 mr-1" />}
+            Scan Screen
+          </Button>
+        )}
 
         {/* Coding mode */}
         <Button

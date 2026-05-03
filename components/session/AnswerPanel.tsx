@@ -148,6 +148,46 @@ function MarkdownAnswer({ text, streaming }: { text: string; streaming?: boolean
   while (i < lines.length) {
     const line = lines[i];
 
+    // Table (| col1 | col2 |)
+    const tableMatch = line.match(/^\|.+\|$/);
+    if (tableMatch && !line.includes('---')) {
+      const tableLines: string[] = [];
+      while (i < lines.length && lines[i].match(/^\|.+\|$/)) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      if (tableLines.length > 0) {
+        const rows = tableLines.map(row => row.split('|').filter(c => c.trim()));
+        const tbody = rows.slice(1).map((row, ri) => (
+          <tr key={ri}>
+            {row.map((cell, c) => (
+              <td key={c} className={`px-3 py-2 text-white/80 text-[20px] ${c === 0 ? 'font-medium' : ''} border-l border-white/10`}>
+                {cell.trim()}
+              </td>
+            ))}
+          </tr>
+        ));
+        nodes.push(
+          <table key={i} className="w-full text-left border border-white/10 rounded my-3 overflow-hidden text-sm">
+            <thead>
+              <tr className="bg-white/5">
+                {rows[0]?.map((h, c) => (
+                  <th key={c} className="px-3 py-2 text-white/60 text-[20px] font-medium border-b border-white/10">
+                    {h.trim()}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>{tbody}</tbody>
+          </table>
+        );
+      }
+      continue;
+    }
+
+    // Skip |---| separator
+    if (line.match(/^\|?[-:]+\|/)) { i++; continue; }
+
     // Fenced code block
     const fenceMatch = line.match(/^```(\w*)/);
     if (fenceMatch) {
@@ -194,7 +234,7 @@ function MarkdownAnswer({ text, streaming }: { text: string; streaming?: boolean
           <span className="text-cyan-400/50 font-mono text-xs mt-0.5 shrink-0 w-4 text-right">
             {numMatch[1]}.
           </span>
-          <span className="text-white/85 text-sm leading-relaxed">
+          <span className="text-white/85 text-[22px] leading-relaxed">
             <InlineTokens line={numMatch[2]} />
           </span>
         </div>
@@ -208,7 +248,7 @@ function MarkdownAnswer({ text, streaming }: { text: string; streaming?: boolean
       nodes.push(
         <div key={i} className="flex gap-2.5 items-start">
           <span className="text-cyan-400/60 mt-1.5 shrink-0 text-xs">▸</span>
-          <span className="text-white/85 text-sm leading-relaxed">
+          <span className="text-white/85 text-[22px] leading-relaxed">
             <InlineTokens line={bulletMatch[1]} />
           </span>
         </div>
@@ -224,7 +264,7 @@ function MarkdownAnswer({ text, streaming }: { text: string; streaming?: boolean
 
     // Normal paragraph
     nodes.push(
-      <p key={i} className="text-white/85 text-sm leading-relaxed">
+      <p key={i} className="text-white/85 text-[22px] leading-relaxed">
         <InlineTokens line={line} />
       </p>
     );

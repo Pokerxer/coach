@@ -69,6 +69,10 @@ export default function NewSessionPage() {
         return;
       }
 
+      // Clear any leftover transcript/QA from a previous session before navigating
+      const { clearSession } = (await import('@/store/session')).useSessionStore.getState();
+      clearSession();
+
       router.push(`/session/${data.session.id}`);
     } catch {
       toast.error('Failed to start session');

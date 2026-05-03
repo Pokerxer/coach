@@ -5,8 +5,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   showOverlay:     ()        => ipcRenderer.invoke('show-overlay'),
   hideOverlay:     ()        => ipcRenderer.invoke('hide-overlay'),
+  minimizeOverlay: ()        => ipcRenderer.invoke('minimize-overlay'),
   toggleOverlay:   ()        => ipcRenderer.invoke('toggle-overlay'),
+  showMain:        ()        => ipcRenderer.invoke('show-main'),
+  panicHide:       ()        => ipcRenderer.invoke('panic-hide'),
+  verifyStealth:   ()        => ipcRenderer.invoke('verify-stealth'),
   setClickthrough: (enable)  => ipcRenderer.invoke('set-clickthrough', enable),
+  getClickthrough: ()        => ipcRenderer.invoke('get-clickthrough'),
+  onClickthroughChanged: (cb) => ipcRenderer.on('clickthrough-changed', (_, val) => cb(val)),
+  offClickthroughChanged: (cb) => ipcRenderer.off('clickthrough-changed', cb),
   overlayReady:    ()        => ipcRenderer.invoke('overlay-ready'),
 
   // Screen capture (Electron-native)
