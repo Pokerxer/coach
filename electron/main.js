@@ -62,6 +62,11 @@ function applyStealthMode(win) {
   win.setContentProtection(true);
   win.setAlwaysOnTop(true, 'screen-saver', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  
+  // Additional macOS-specific stealth
+  if (process.platform === 'darwin') {
+    win.setHiddenInMissionControl(true);
+  }
 }
 }
 
