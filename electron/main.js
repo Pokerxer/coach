@@ -180,26 +180,7 @@ ipcMain.handle('show-overlay', () => {
 });
 
 ipcMain.handle('hide-overlay',     () => { overlayWindow?.hide(); });
-
-ipcMain.handle('toggle-overlay', () => {
-  if (!overlayWindow) return;
-  if (overlayWindow.isVisible()) {
-    overlayWindow.hide();
-  } else {
-    applyStealthMode(overlayWindow);
-    overlayWindow.showInactive(); // Prevent focus stealing
-  }
-});
-
-ipcMain.handle('hide-overlay',     () => { overlayWindow?.hide(); });
 ipcMain.handle('minimize-overlay', () => { overlayWindow?.minimize(); });
-
-ipcMain.handle('toggle-overlay', () => {
-  if (!overlayWindow) return;
-  overlayWindow.isVisible() 
-    ? overlayWindow.hide() 
-    : (applyStealthMode(overlayWindow), overlayWindow.showInactive());
-});
 
 ipcMain.handle('show-main', () => {
   if (!mainWindow) createMainWindow();
