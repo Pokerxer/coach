@@ -48,11 +48,23 @@
       const tabs = await chrome.runtime.sendMessage({ type: 'GET_TABS' });
       tabSelect.innerHTML = '<option value="">Select a tab...</option>';
       
+      if (!tabs || tabs.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No tabs found - refresh page';
+        tabSelect.appendChild(option);
+        return;
+      }
+      
       tabs.forEach(tab => {
         const option = document.createElement('option');
         option.value = tab.id;
-        const url = new URL(tab.url);
-        option.textContent = `${tab.title.substring(0, 35)} (${url.hostname})`;
+        try {
+          const url = new URL(tab.url);
+          option.textContent = `${tab.title?.substring(0, 35) || 'Untitled'} (${url.hostname})`;
+        } catch {
+          option.textContent = tab.title?.substring(0, 40) || 'Untitled';
+        }
         tabSelect.appendChild(option);
       });
     } catch (err) {

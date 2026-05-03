@@ -45,15 +45,16 @@ async function stopCapture() {
 
 function getTabs() {
   return chrome.tabs.query({ 
-    audible: true,
-    status: 'complete'
+    status: 'complete',
+    windowType: 'normal'
   }).then(tabs => {
     return tabs.filter(tab => 
       tab.url && 
       !tab.url.startsWith('chrome://') &&
       !tab.url.startsWith('chrome-extension://') &&
       !tab.url.startsWith('devtools://') &&
-      !tab.url.startsWith('file://')
+      !tab.url.startsWith('file://') &&
+      !tab.url.startsWith('about:')
     );
   });
 }
