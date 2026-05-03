@@ -1,5 +1,5 @@
 // Parakeet AI - Background Service Worker
-// Handles tab audio capture and messaging
+// Uses chrome.tabCapture API for tab audio capture
 
 let activeStream = null;
 let activeTabId = null;
@@ -8,22 +8,23 @@ async function captureTab(tabId) {
   await stopCapture();
   
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    // Get the media stream from the tab
+    const stream = await chrome.tabCapture.capture({
       audio: {
         mandatory: {
           chromeMediaSource: 'tab',
           chromeMediaSourceId: tabId
-        },
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
+        }
       },
       video: false
     });
     
+    if (!stream || stream.getAudioTracks().length === 0) {
+      return { success: false, error: 'No audio track available' };
+    }
+    
     activeStream = stream;
     activeTabId = tabId;
-    
     stream.getAudioTracks()[0].onended = () => {
       stopCapture();
     };
@@ -93,13 +94,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener(tabId => {
   if (tabId === activeTabId) {
-    stopCapture();
-    chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
-  }
-});
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.audible === false && tabId === activeTabId) {
     stopCapture();
     chrome.runtime.sendMessage({ type: 'CAPTURE_STOPPED' });
   }
