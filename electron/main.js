@@ -69,10 +69,11 @@ function createMainWindow() {
 
 function applyStealthMode(win) {
   win.setContentProtection(true);
-  // 'screen-saver' level floats above full-screen apps including Zoom in FS mode.
-  // Level 1 (relativeTo argument) keeps it just above other always-on-top windows.
+  // 'screen-saver' level floats above full-screen apps including Zoom/Meet in FS mode.
   win.setAlwaysOnTop(true, 'screen-saver', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // Also set the window level explicitly
+  win.setLevel(1); // CGWindowLevelForKey('screenSaverWindow')
 }
 
 function createOverlayWindow() {
