@@ -63,8 +63,18 @@ function applyStealthMode(win) {
   win.setAlwaysOnTop(true, 'screen-saver', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   
-  // Additional macOS-specific stealth
+  // Hide from Mission Control (three-finger swipe)
   if (process.platform === 'darwin') {
+    win.setHiddenInMissionControl(true);
+  }
+}
+
+// Preserve platform-specific config after focus events
+function preserveWindowConfiguration(win) {
+  if (!win || win.isDestroyed()) return;
+  
+  if (process.platform === 'darwin') {
+    win.setWindowButtonVisibility(false);
     win.setHiddenInMissionControl(true);
   }
 }
@@ -108,7 +118,7 @@ function createOverlayWindow() {
   // Deliberately NOT on 'move' or 'resize' — those fire continuously and
   // racing setAlwaysOnTop with the window manager causes flicker.
   overlayWindow.on('show',    () => applyStealthMode(overlayWindow));
-  overlayWindow.on('focus',   () => applyStealthMode(overlayWindow));
+  overlayWindow.on('focus',   () => { applyStealthMode(overlayWindow); preserveWindowConfiguration(overlayWindow); });
   overlayWindow.on('restore', () => applyStealthMode(overlayWindow));
   overlayWindow.on('blur',    () => applyStealthMode(overlayWindow));
 
@@ -146,9 +156,20 @@ function createOverlayWindow() {
 // ─── IPC: window control ──────────────────────────────────────────────────────
 ipcMain.handle('show-overlay', () => {
   if (!overlayWindow) return;
-  applyStealthMode(overlayWindow); // always re-enforce before showing
-  overlayWindow.show();
-  overlayWindow.focus();
+  applyStealthMode(overlayWindow);
+  overlayWindow.showInactive(); // Show without stealing focus from interview browser
+});
+
+ipcMain.handle('hide-overlay',     () => { overlayWindow?.hide(); });
+
+ipcMain.handle('toggle-overlay', () => {
+  if (!overlayWindow) return;
+  if (overlayWindow.isVisible()) {
+    overlayWindow.hide();
+  } else {
+    applyStealthMode(overlayWindow);
+    overlayWindow.showInactive(); // Prevent focus stealing
+  }
 });
 
 ipcMain.handle('hide-overlay',     () => { overlayWindow?.hide(); });
@@ -156,7 +177,9 @@ ipcMain.handle('minimize-overlay', () => { overlayWindow?.minimize(); });
 
 ipcMain.handle('toggle-overlay', () => {
   if (!overlayWindow) return;
-  overlayWindow.isVisible() ? overlayWindow.hide() : (applyStealthMode(overlayWindow), overlayWindow.show());
+  overlayWindow.isVisible() 
+    ? overlayWindow.hide() 
+    : (applyStealthMode(overlayWindow), overlayWindow.showInactive());
 });
 
 ipcMain.handle('show-main', () => {
@@ -304,7 +327,7 @@ app.whenReady().then(async () => {
       overlayWindow.hide();
     } else {
       applyStealthMode(overlayWindow);
-      overlayWindow.show();
+      overlayWindow.showInactive(); // Don't steal focus from interview browser
     }
   });
 
