@@ -98,7 +98,6 @@ function preserveWindowConfiguration(win) {
     win.setHiddenInMissionControl(true);
   }
 }
-}
 
 // ─── 4. Overlay window ────────────────────────────────────────────────────────
 function createOverlayWindow() {
