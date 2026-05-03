@@ -5,25 +5,21 @@
   "description": "Real-time AI interview assistant",
   "permissions": [
     "tabCapture",
-    "sidePanel",
     "storage",
     "tabs",
-    "alarms"
+    "cookies"
   ],
-  "host_permissions": ["<all_urls>"],
-  "side_panel": {"default_path": "popup.html"},
-  "background": {"service_worker": "background.js", "type": "module"},
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_end"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["inject.js"],
-      "matches": ["<all_urls>"]
+      "js": ["content.js"]
     }
   ],
   "action": {

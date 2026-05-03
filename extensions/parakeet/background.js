@@ -1,28 +1,53 @@
 // Parakeet AI - Background Service Worker
+// Connects to web app API for transcription + answers
 
 let activeStream = null;
 let activeTabId = null;
 let mediaRecorder = null;
 let audioChunks = [];
-let transcription = [];
-let answers = [];
-let interviewNotes = [];
-let sessionStartTime = null;
-let isSessionActive = false;
+let sessionData = {
+  active: false,
+  sessionId: null,
+  startTime: null,
+  transcription: [],
+  answers: []
+};
 
-// Load config
-async function getConfig() {
-  const result = await chrome.storage.local.get([
-    'apiKey', 'model', 'resume', 'jobDescription', 'autoDetect', 'language'
-  ]);
-  return {
-    apiKey: result.apiKey || '',
-    model: result.model || 'gpt-4.1',
-    resume: result.resume || '',
-    jobDescription: result.jobDescription || '',
-    autoDetect: result.autoDetect !== false,
-    language: result.language || 'en'
-  };
+// Get web app URL
+async function getAppUrl() {
+  const result = await chrome.storage.local.get(['appUrl']);
+  return result.appUrl || 'http://localhost:3000';
+}
+
+// Get Supabase session cookie
+async function getSessionCookie() {
+  const cookies = await chrome.cookies.getAll({});
+  const sbCookie = cookies.find(c => 
+    c.name.includes('supabase') && c.name.includes('token')
+  );
+  return sbCookie?.value || null;
+}
+
+// API helper with auth
+async function apiCall(endpoint, options = {}) {
+  const appUrl = await getAppUrl();
+  const url = `${appUrl}${endpoint}`;
+  
+  const resp = await fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers
+    }
+  });
+  
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`API error: ${resp.status} ${err}`);
+  }
+  
+  return resp;
 }
 
 // Start tab capture
@@ -36,263 +61,257 @@ async function startCapture(tabId) {
     });
     
     if (!stream || stream.getAudioTracks().length === 0) {
-      throw new Error('No audio track');
+      throw new Error('No audio available');
     }
     
     activeStream = stream;
     activeTabId = tabId;
-    sessionStartTime = Date.now();
-    isSessionActive = true;
-    transcription = [];
-    answers = [];
-    interviewNotes = [];
+    
+    // Set up MediaRecorder
+    mediaRecorder = new MediaRecorder(stream, {
+      mimeType: 'audio/webm'
+    });
+    
+    audioChunks = [];
+    
+    mediaRecorder.ondataavailable = async (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+        
+        // Transcribe every 3 chunks (3 seconds)
+        if (audioChunks.length >= 3) {
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          audioChunks = [];
+          await processAudio(blob);
+        }
+      }
+    };
+    
+    mediaRecorder.start(1000);
     
     stream.getAudioTracks()[0].onended = () => {
       stopCapture();
     };
     
+    chrome.runtime.sendMessage({ type: 'SESSION_START', tabId });
+    
     return { success: true };
   } catch (err) {
+    console.error('Capture failed:', err);
     return { success: false, error: err.message };
   }
 }
 
 // Stop capture
 async function stopCapture() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    // Final chunk
+    if (audioChunks.length > 0) {
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      await processAudio(blob);
+      audioChunks = [];
+    }
+    mediaRecorder.stop();
+  }
+  
   if (activeStream) {
     activeStream.getTracks().forEach(t => t.stop());
     activeStream = null;
   }
-  activeTabId = null;
-  isSessionActive = false;
-  sessionStartTime = null;
-}
-
-// Get available tabs
-function getTabs() {
-  return chrome.tabs.query({ 
-    status: 'complete',
-    windowType: 'normal',
-    active: false
-  }).then(tabs => {
-    return tabs.filter(tab => 
-      tab.url && 
-      !tab.url.startsWith('chrome://') &&
-      !tab.url.startsWith('chrome-extension://') &&
-      !tab.url.startsWith('devtools://')
-    ).map(tab => ({
-      id: tab.id,
-      title: tab.title,
-      url: tab.url,
-      favIconUrl: tab.favIconUrl
-    }));
-  });
-}
-
-// Transcribe audio using Web Speech API (browser built-in)
-async function transcribeAudio(audioBlob) {
-  const config = await getConfig();
   
-  // Try Whisper API first if key exists
-  if (config.apiKey) {
+  mediaRecorder = null;
+  activeTabId = null;
+  sessionData.active = false;
+  
+  // End session in DB
+  if (sessionData.sessionId) {
     try {
-      const formData = new FormData();
-      formData.append('file', audioBlob, 'audio.webm');
-      formData.append('model', 'whisper-1');
-      formData.append('language', config.language);
-      
-      const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${config.apiKey}` },
-        body: formData
+      await apiCall(`/api/sessions/${sessionData.sessionId}/end`, {
+        method: 'POST'
       });
-      
-      if (resp.ok) {
-        const data = await resp.json();
-        return data.text;
-      }
     } catch {}
   }
   
-  return '';
+  chrome.runtime.sendMessage({ type: 'SESSION_END' });
 }
 
-// Generate AI answer
-async function generateAnswer(question) {
-  const config = await getConfig();
-  
-  if (!config.apiKey) {
-    return 'Set your API key in settings to enable AI answers.';
-  }
-  
-  const systemPrompt = `You are an interview assistant. Based on the candidate's resume and job description, provide concise, natural-sounding answers to interview questions. Keep answers under 150 words. Match the candidate's experience level and background.
-
-Resume: ${config.resume}
-
-Job: ${config.jobDescription}`;
-
+// Process audio chunk - transcribe + generate answer
+async function processAudio(audioBlob) {
   try {
-    const model = config.model === 'claude-4' 
-      ? 'claude-sonnet-4-20250514' 
-      : config.model === 'gpt-5' 
-        ? 'gpt-5' 
-        : 'gpt-4.1';
+    // Transcribe
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'audio.webm');
     
-    const resp = await fetch(`https://api.openai.com/v1/chat/completions`, {
+    const transResp = await fetch(`${await getAppUrl()}/api/transcribe`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4.1',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: question }
-        ],
-        max_tokens: 400,
-        temperature: 0.7
-      })
+      credentials: 'include',
+      body: formData
     });
     
-    if (resp.ok) {
-      const data = await resp.json();
-      return data.choices[0].message.content;
+    if (!transResp.ok) return;
+    
+    const transData = await transResp.json();
+    const text = transData.text?.trim();
+    
+    if (!text || text.length < 5) return;
+    
+    // Add to transcript
+    const item = {
+      text,
+      time: new Date().toLocaleTimeString()
+    };
+    sessionData.transcription.push(item);
+    
+    chrome.runtime.sendMessage({ 
+      type: 'TRANSCRIPT_ADD', 
+      item 
+    });
+    
+    // Detect question + generate answer
+    if (isQuestion(text)) {
+      await generateAnswer(text);
     }
-  } catch {}
-  
-  return 'Failed to generate answer. Check your API key.';
+  } catch (err) {
+    console.error('Process failed:', err);
+  }
 }
 
 // Check if text is a question
 function isQuestion(text) {
   return text.includes('?') || 
-    /^(who|what|when|where|why|how|can|could|would|should|do|does|did|are|is|were|was)\b/i.test(text);
+    /^(who|what|when|where|why|how|can|could|would|should|do|does|did|are|is|were|was|tell|describe|explain)\b/i.test(text);
 }
 
-// Process transcribed text
-async function processTranscription(text) {
-  if (!text || text.trim().length < 10) return;
-  
-  const timestamp = new Date().toLocaleTimeString();
-  transcription.push({ text, time: timestamp, speaker: 'interviewer' });
-  
-  // Send to popup
-  chrome.runtime.sendMessage({ 
-    type: 'TRANSCRIPT_ADD', 
-    item: { text, time: timestamp, speaker: 'interviewer' }
-  });
-  
-  // Auto-detect questions
-  if (isQuestion(text)) {
-    const config = await getConfig();
-    if (config.autoDetect) {
-      const answer = await generateAnswer(text);
+// Generate AI answer via web app
+async function generateAnswer(question) {
+  try {
+    const appUrl = await getAppUrl();
+    const resp = await fetch(`${appUrl}/api/answer`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        model: 'gpt-4o-mini',
+        history: sessionData.answers.slice(-5)
+      })
+    });
+    
+    if (!resp.ok || !resp.body) return;
+    
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let fullAnswer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      for (const line of decoder.decode(value).split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6);
+        if (raw === '[DONE]') continue;
+        try {
+          const obj = JSON.parse(raw);
+          if (obj.token) {
+            fullAnswer += obj.token;
+          }
+        } catch {}
+      }
+    }
+    
+    if (fullAnswer) {
       const answerItem = {
-        question: text.substring(0, 80) + (text.length > 80 ? '...' : ''),
-        text: answer,
-        time: timestamp
+        question: question.substring(0, 100) + (question.length > 100 ? '...' : ''),
+        text: fullAnswer,
+        time: new Date().toLocaleTimeString()
       };
-      answers.push(answerItem);
+      sessionData.answers.push(answerItem);
       
       chrome.runtime.sendMessage({ 
         type: 'ANSWER_ADD', 
         item: answerItem 
       });
+      
+      // Save to DB
+      if (sessionData.sessionId) {
+        try {
+          await apiCall(`/api/sessions/${sessionData.sessionId}/qa`, {
+            method: 'POST',
+            body: JSON.stringify({ question, answer: fullAnswer })
+          });
+        } catch {}
+      }
     }
+  } catch (err) {
+    console.error('Answer failed:', err);
   }
 }
 
-// Generate post-interview notes
-async function generateNotes() {
-  const config = await getConfig();
-  if (!config.apiKey || transcription.length === 0) return null;
-  
-  const fullTranscript = transcription.map(t => t.text).join(' ');
-  
+// Create session in DB
+async function createSession(data) {
   try {
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    const resp = await apiCall('/api/sessions', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4.1',
-        messages: [
-          { role: 'system', content: 'Summarize this interview. List key questions asked, topics covered, and areas where the candidate could improve.' },
-          { role: 'user', content: fullTranscript }
-        ],
-        max_tokens: 800
-      })
+      body: JSON.stringify(data)
     });
-    
-    if (resp.ok) {
-      const data = await resp.json();
-      return data.choices[0].message.content;
-    }
-  } catch {}
-  
-  return null;
+    const result = await resp.json();
+    return result.session?.id;
+  } catch (err) {
+    console.error('Create session failed:', err);
+    return null;
+  }
 }
 
-// Detect meeting tab (auto-detect)
+// Get tabs
+async function getTabs() {
+  const tabs = await chrome.tabs.query({ 
+    status: 'complete',
+    windowType: 'normal'
+  });
+  return tabs
+    .filter(tab => tab.url && !tab.url.startsWith('chrome') && !tab.url.startsWith('devtools'))
+    .map(tab => ({ id: tab.id, title: tab.title, url: tab.url }));
+}
+
+// Detect meeting
 async function detectMeeting() {
   const tabs = await getTabs();
-  const meetingPatterns = [
-    'zoom.us', 'meet.google.com', 'teams.microsoft.com', 
-    'webex.com', 'chime.aws', 'hacker', 'leetcode'
-  ];
-  
-  for (const tab of tabs) {
-    if (meetingPatterns.some(p => tab.url.includes(p))) {
-      return tab;
-    }
-  }
-  return null;
+  const patterns = ['zoom.us', 'meet.google.com', 'teams.microsoft.com', 'webex.com'];
+  return tabs.find(tab => patterns.some(p => tab.url.includes(p)));
 }
 
 // Message handler
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handlers = {
-    START_CAPTURE: async () => sendResponse(await startCapture(message.tabId)),
-    STOP_CAPTURE: async () => {
-      await stopCapture();
-      sendResponse({ success: true });
+    START_CAPTURE: async () => {
+      // Create session first
+      const sessionId = await createSession({
+        jobTitle: message.jobTitle,
+        companyName: message.companyName,
+        model: message.model || 'gpt-4o-mini'
+      });
+      
+      sessionData.sessionId = sessionId;
+      sessionData.active = true;
+      sessionData.startTime = Date.now();
+      sessionData.transcription = [];
+      sessionData.answers = [];
+      
+      sendResponse(await startCapture(message.tabId));
     },
+    STOP_CAPTURE: async () => { await stopCapture(); sendResponse({}); },
     GET_TABS: async () => sendResponse(await getTabs()),
-    GET_STATUS: () => sendResponse({ 
-      active: isSessionActive, 
-      tabId: activeTabId,
-      startTime: sessionStartTime
-    }),
-    TRANSCRIBE: async () => {
-      const text = await transcribeAudio(message.audioBlob);
-      if (text) processTranscription(text);
-      sendResponse({ text });
-    },
+    DETECT_MEETING: async () => sendResponse(await detectMeeting()),
+    GET_STATUS: () => sendResponse(sessionData),
     GENERATE_ANSWER: async () => {
-      const answer = await generateAnswer(message.question);
-      const item = { question: message.question, text: answer, time: new Date().toLocaleTimeString() };
-      answers.push(item);
-      chrome.runtime.sendMessage({ type: 'ANSWER_ADD', item });
-      sendResponse({ answer });
+      await generateAnswer(message.question);
+      sendResponse({});
     },
-    GENERATE_NOTES: async () => {
-      const notes = await generateNotes();
-      sendResponse({ notes });
-    },
-    DETECT_MEETING: async () => {
-      const tab = await detectMeeting();
-      sendResponse(tab);
-    },
-    GET_SESSION: () => sendResponse({
-      active: isSessionActive,
-      transcription,
-      answers,
-      notes: interviewNotes,
-      duration: sessionStartTime ? (Date.now() - sessionStartTime) / 1000 : 0
-    })
+    SET_APP_URL: async () => {
+      await chrome.storage.local.set({ appUrl: message.url });
+      sendResponse({});
+    }
   };
   
   if (handlers[message.type]) {
@@ -301,7 +320,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Clean up on tab close
+// Cleanup
 chrome.tabs.onRemoved.addListener(tabId => {
   if (tabId === activeTabId) stopCapture();
 });
